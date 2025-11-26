@@ -1,134 +1,164 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <title>3D Bat Trajectories Viewer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8">
+  <title>Bat Trajectory Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+                   "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+      margin: 16px;
+      background: #f5f5f5;
     }
-    header {
-      padding: 10px 16px;
-      border-bottom: 1px solid #ddd;
+    h1 {
+      font-size: 20px;
+      margin-bottom: 12px;
+    }
+    .controls {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
       align-items: center;
-    }
-    header h1 {
-      font-size: 16px;
-      margin: 0;
-      margin-right: 12px;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 0 4px rgba(0,0,0,0.08);
     }
     label {
       font-size: 14px;
     }
     select {
-      padding: 4px 8px;
-      border-radius: 4px;
-    }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      padding: 6px 16px 6px;
-      border-bottom: 1px solid #ddd;
-      background: #fafafa;
-      flex-wrap: wrap;
-    }
-    .tab-button {
-      padding: 4px 10px;
-      border-radius: 999px;
+      padding: 4px 6px;
+      border-radius: 6px;
       border: 1px solid #ccc;
+      font-size: 14px;
+    }
+    #viewer-wrapper {
+      margin-top: 10px;
       background: #fff;
-      cursor: pointer;
-      font-size: 13px;
+      border-radius: 10px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.12);
+      padding: 8px;
     }
-    .tab-button.active {
-      background: #007bff;
-      color: #fff;
-      border-color: #007bff;
-    }
-    .viewer {
-      flex: 1;
-      min-height: 0;
-    }
-    iframe {
+    #viewer {
       width: 100%;
-      height: 100%;
+      height: 80vh;
       border: none;
+      border-radius: 8px;
+    }
+    .info {
+      font-size: 12px;
+      color: #555;
+      margin-top: 4px;
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>バット軌道ビューア</h1>
+  <h1>Bat Trajectory Viewer</h1>
+
+  <div class="controls">
     <label>
-      選手：
-      <select id="playerSelect">
-        <!-- value はファイル名プレフィックスになる -->
-        <option value="nomura">野村</option>
-        <option value="ando">安藤</option>
-        <option value="segawa">瀬川</option>
-        <!-- 他の選手もここに追加 -->
+      選手:
+      <select id="playerSelect"></select>
+    </label>
+
+    <label>
+      バージョン:
+      <select id="versionSelect">
+        <option value="normal">通常</option>
+        <option value="vanish">vanish</option>
       </select>
     </label>
-  </header>
 
-  <div class="tabs" id="courseTabs">
-    <!-- data-course が Z1〜Z9 になる -->
-    <button class="tab-button active" data-course="Z1">Z1</button>
-    <button class="tab-button" data-course="Z2">Z2</button>
-    <button class="tab-button" data-course="Z3">Z3</button>
-    <button class="tab-button" data-course="Z4">Z4</button>
-    <button class="tab-button" data-course="Z5">Z5</button>
-    <button class="tab-button" data-course="Z6">Z6</button>
-    <button class="tab-button" data-course="Z7">Z7</button>
-    <button class="tab-button" data-course="Z8">Z8</button>
-    <button class="tab-button" data-course="Z9">Z9</button>
+    <label>
+      コース:
+      <select id="courseSelect">
+        <option value="ALL">ALL</option>
+        <option value="Z1">Z1</option>
+        <option value="Z2">Z2</option>
+        <option value="Z3">Z3</option>
+        <option value="Z4">Z4</option>
+        <option value="Z5">Z5</option>
+        <option value="Z6">Z6</option>
+        <option value="Z7">Z7</option>
+        <option value="Z8">Z8</option>
+        <option value="Z9">Z9</option>
+      </select>
+    </label>
   </div>
 
-  <div class="viewer">
-    <iframe id="plotFrame"></iframe>
+  <div id="viewer-wrapper">
+    <iframe id="viewer" src=""></iframe>
+    <div class="info" id="infoText"></div>
   </div>
 
   <script>
-    const playerSelect = document.getElementById('playerSelect');
-    const tabs = Array.from(document.querySelectorAll('.tab-button'));
-    const iframe = document.getElementById('plotFrame');
+    // ====== 設定：ここに選手を追加していく ======
+    // id: Python 側の PLAYER_ID （フォルダ名）と同じ
+    // hasVanish: vanish 付き HTML を出力しているかどうか
+    const players = [
+      { id: "Ando",   label: "安藤",   hasVanish: true  },
+      { id: "Oomura", label: "大村",   hasVanish: false },
+      // 追加例:
+      // { id: "Nomura", label: "野村", hasVanish: true },
+    ];
 
-    // デフォルト：最初の選手 × Z1
-    let currentCourse = 'Z1';
+    const playerSelect  = document.getElementById("playerSelect");
+    const versionSelect = document.getElementById("versionSelect");
+    const courseSelect  = document.getElementById("courseSelect");
+    const viewer        = document.getElementById("viewer");
+    const infoText      = document.getElementById("infoText");
 
-    function updateIframe() {
-      const player = playerSelect.value; // 例: "nomura"
-      const course = currentCourse;      // 例: "Z3"
-      const filename = `${player}_${course}.html`;
-      iframe.src = filename; // 相対パスでロード
+    // プレイヤー選択肢を設定
+    players.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.label + " (" + p.id + ")";
+      playerSelect.appendChild(opt);
+    });
+
+    // vanish が無い選手を選んだら、バージョンを通常固定に
+    function updateVersionOptions() {
+      const currentId = playerSelect.value;
+      const player = players.find(p => p.id === currentId);
+      if (!player) return;
+
+      if (!player.hasVanish) {
+        versionSelect.value = "normal";
+        versionSelect.disabled = true;
+      } else {
+        versionSelect.disabled = false;
+      }
     }
 
-    // タブクリックでコース変更
-    tabs.forEach(btn => {
-      btn.addEventListener('click', () => {
-        tabs.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentCourse = btn.dataset.course;
-        updateIframe();
-      });
-    });
+    function buildFilePath() {
+      const playerId = playerSelect.value;
+      const version  = versionSelect.value;
+      const course   = courseSelect.value;
 
-    // 選手変更
-    playerSelect.addEventListener('change', () => {
-      updateIframe();
-    });
+      // Python 側の命名規則に合わせる
+      // normal:  {PLAYER_ID}_{COURSE}.html
+      // vanish:  {PLAYER_ID}_vanish_{COURSE}.html
+      const prefix = (version === "vanish") ? `${playerId}_vanish` : playerId;
+      const fileName = `${prefix}_${course}.html`;
+      return `plots/${fileName}`;
+    }
+
+    function updateViewer() {
+      updateVersionOptions();
+      const path = buildFilePath();
+      viewer.src = path;
+      infoText.textContent = `表示ファイル: ${path}`;
+    }
+
+    playerSelect.addEventListener("change", updateViewer);
+    versionSelect.addEventListener("change", updateViewer);
+    courseSelect.addEventListener("change", updateViewer);
 
     // 初期表示
-    updateIframe();
+    updateViewer();
   </script>
 </body>
 </html>
