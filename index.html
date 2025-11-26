@@ -1,121 +1,884 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>バット軌道ビューア - 選手一覧</title>
+# -*- coding: utf-8 -*-
+"""
+Excel (trial, index, top_x/y/z, bottom_x/y/z) → Plotly 3D アニメ + StrikeZone
+- 各シート(Z1〜Z9)ごとに HTML 出力
+- ALL シートもまとめて出力
+- 出力先は固定:
+    C:\Users\ubila\result\answer\highschool\html
+- フォルダ名を選手名として使用
+    例) ...\Momo\momo_vanish_0908_....xlsx → Momo_*.html
+- Excelファイル名に「vanish」が含まれていたら:
+    Momo_vanish_Z1.html のように "_vanish" を挟む
+- ページを開いた瞬間にアニメが勝手に再生されないように修正
+"""
 
-<style>
-  body {
-    font-family: system-ui, sans-serif;
-    margin: 20px;
-    background: #f4f4f4;
-  }
-  h1 {
-    text-align: center;
-    margin-bottom: 30px;
-  }
-  .player {
-    background: white;
-    padding: 16px;
-    margin-bottom: 16px;
-    border-radius: 10px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  }
-  details summary {
-    font-size: 1.2em;
-    cursor: pointer;
-    font-weight: bold;
-    padding: 5px 0;
-  }
-  .links a {
-    display: inline-block;
-    margin: 4px 6px;
-    padding: 6px 12px;
-    background: #1976d2;
-    color: white;
-    text-decoration: none;
-    border-radius: 6px;
-    font-size: 0.9em;
-  }
-  .links a:hover {
-    background: #0d47a1;
-  }
-</style>
-</head>
-<body>
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from pathlib import Path
+import re
+from collections import Counter
 
-<h1>バット軌道ビューア - 選手一覧</h1>
+# ===== 入力 =====
+excel_path = r"C:\Users\ubila\result\answer\highschool\Ando\ando_vanish_0908_error.xlsx"
+strikezone_base = r"C:\Users\ubila\result\answer\highschool\Ando\ando_StrikeZone_vanish20250908_173345"
 
-<script>
-// ==== ファイル一覧（GitHubにあるHTML） ====
-// 必要に応じて追加・編集 OK
-const files = [
-  // ここに自動で追加（実際は下で自動生成する）
-];
+# ===== 出力ディレクトリ（固定） =====
+OUTPUT_HTML_DIR = Path(r"C:\Users\ubila\result\answer\highschool\html")
+OUTPUT_HTML_DIR.mkdir(parents=True, exist_ok=True)
 
-// ==== GitHub API からリストを自動取得 ====
-async function loadFiles() {
-  // リポジトリ情報（あなたのアカウント名に変更）
-  const repo = "sakuubi2356/Swing-Trajectory";
+# プレイヤー名 = 親フォルダ名（例: ...\Momo\xxx.xlsx → "Momo"）
+PLAYER_ID = Path(excel_path).parent.name
 
-  const url = `https://api.github.com/repos/${repo}/contents/`;
-  const res = await fetch(url);
-  const data = await res.json();
+# Excelファイル名に "vanish" を含むかどうか（大文字小文字は無視）
+VANISH_FLAG = "vanish" in Path(excel_path).stem.lower()
 
-  // HTML のみ抽出
-  const htmlFiles = data
-    .filter(item => item.name.endsWith(".html"))
-    .map(item => item.name);
+# ===== 表示設定 =====
+AXIS_ORDER = ("z", "x", "y")  # Plotly(x,y,z) = Unity(z,x,y)
+AXIS_SIGN = (+1, -1, +1)
 
-  buildUI(htmlFiles);
+show_top_bottom_paths = True
+frame_ms = 80
+root_is_bottom = True
+root_marker_size = 6
+root_marker_line_w = 2
+SHOW_TRIALS = None  # 特定 trial だけ見たいときは [1,2,3] など
+
+SZ_COLOR = "blue"
+SZ_SIDE_OPACITY = 0.6
+SZ_GRID_MARKER_SIZE = 3
+
+# 「どこまで再生」ボタンで使う index 値（存在するものだけ採用）
+END_INDEX_CANDIDATES = [-15, 0, 15]
+
+# ===== 色 =====
+Z_COLORS = {
+    "Z1": "#d62728",
+    "Z2": "#9467bd",
+    "Z3": "#2ca02c",
+    "Z4": "#ff7f0e",
+    "Z5": "#1f77b4",
+    "Z6": "#17becf",
+    "Z7": "#8c564b",
+    "Z8": "#e377c2",
+    "Z9": "#7f7f7f",
 }
+TRIAL_COLORS = [
+    "red",
+    "blue",
+    "green",
+    "orange",
+    "purple",
+    "cyan",
+    "magenta",
+    "brown",
+    "black",
+    "lime",
+]
 
-// ==== UI 自動生成 ====
-function buildUI(htmlFiles) {
-  const players = {};
+# ===== util =====
+def ensure_exists(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(f"見つかりません: {path}")
 
-  // 選手ごとに分類
-  htmlFiles.forEach(f => {
-    const [name, course] = f.replace(".html", "").split("_");
-    if (!players[name]) players[name] = [];
-    players[name].push(course);
-  });
 
-  const container = document.createElement("div");
+REQUIRED = [
+    "trial",
+    "index",
+    "top_x",
+    "top_y",
+    "top_z",
+    "bottom_x",
+    "bottom_y",
+    "bottom_z",
+]
 
-  Object.keys(players).sort().forEach(player => {
-    const div = document.createElement("div");
-    div.className = "player";
 
-    const details = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = player;
-    details.appendChild(summary);
+def norm_columns(df: pd.DataFrame) -> pd.DataFrame:
+    dfl = df.rename(columns={c: c.lower() for c in df.columns})
+    miss = [c for c in REQUIRED if c not in dfl.columns]
+    if miss:
+        raise ValueError(f"必要列が足りません: {miss} / 実列={list(dfl.columns)}")
+    return dfl
 
-    const links = document.createElement("div");
-    links.className = "links";
 
-    players[player]
-      .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}))
-      .forEach(course => {
-        const a = document.createElement("a");
-        const filename = `${player}_${course}.html`;
-        a.href = filename;
-        a.textContent = course;
-        links.appendChild(a);
-      });
+def remap_unity_to_plotly(arr_x, arr_y, arr_z):
+    src = {"x": np.asarray(arr_x), "y": np.asarray(arr_y), "z": np.asarray(arr_z)}
+    px = AXIS_SIGN[0] * src[AXIS_ORDER[0]]
+    py = AXIS_SIGN[1] * src[AXIS_ORDER[1]]
+    pz = AXIS_SIGN[2] * src[AXIS_ORDER[2]]
+    return px, py, pz
 
-    details.appendChild(links);
-    div.appendChild(details);
-    container.appendChild(div);
-  });
 
-  document.body.appendChild(container);
-}
+def connectors_slice(tx, ty, tz, bx, by, bz, n: int):
+    xs, ys, zs = [], [], []
+    for i in range(n):
+        xs += [tx[i], bx[i], None]
+        ys += [ty[i], by[i], None]
+        zs += [tz[i], bz[i], None]
+    return xs, ys, zs
 
-loadFiles();
-</script>
 
-</body>
-</html>
+def connectors_slice_single(tx, ty, tz, bx, by, bz, i: int):
+    return [tx[i], bx[i], None], [ty[i], by[i], None], [tz[i], bz[i], None]
+
+
+def most_common(values):
+    values = [v for v in values if pd.notna(v)]
+    if not values:
+        return None
+    return Counter(values).most_common(1)[0][0]
+
+
+def guess_zone_label(s):
+    if s is None or (isinstance(s, float) and np.isnan(s)):
+        return None
+    m = re.search(r"Z\s*([1-9])", str(s), flags=re.IGNORECASE)
+    return f"Z{m.group(1)}" if m else None
+
+
+# ===== ボール列 =====
+def pick_ball_columns(df_raw: pd.DataFrame):
+    cols_lower = {str(c).lower(): c for c in df_raw.columns}
+    if all(k in cols_lower for k in ["ball_x", "ball_y", "ball_z"]):
+        return (
+            df_raw[cols_lower["ball_x"]],
+            df_raw[cols_lower["ball_y"]],
+            df_raw[cols_lower["ball_z"]],
+        )
+    if df_raw.shape[1] >= 11:
+        return df_raw.iloc[:, 8], df_raw.iloc[:, 9], df_raw.iloc[:, 10]
+    return None, None, None
+
+
+def standardize_ball_columns(df_raw: pd.DataFrame) -> pd.DataFrame:
+    bx, by, bz = pick_ball_columns(df_raw)
+    out = df_raw.copy()
+    out["ball_x"] = pd.to_numeric(bx, errors="coerce") if bx is not None else np.nan
+    out["ball_y"] = pd.to_numeric(by, errors="coerce") if by is not None else np.nan
+    out["ball_z"] = pd.to_numeric(bz, errors="coerce") if bz is not None else np.nan
+    return out
+
+
+# ===== StrikeZone =====
+def load_strikezone(base_path: str):
+    bp = Path(base_path + "_BottomVerts.csv")
+    tp = Path(base_path + "_TopVerts.csv")
+    gp = Path(base_path + "_NineGrid.csv")
+    ensure_exists(bp)
+    ensure_exists(tp)
+    ensure_exists(gp)
+    B = pd.read_csv(bp)
+    T = pd.read_csv(tp)
+    G = pd.read_csv(gp)
+    return (
+        B[["x", "y", "z"]].to_numpy(),
+        T[["x", "y", "z"]].to_numpy(),
+        G[["x", "y", "z"]].to_numpy(),
+    )
+
+
+def apply_mapping_xyz(arr_xyz: np.ndarray):
+    x, y, z = arr_xyz[:, 0], arr_xyz[:, 1], arr_xyz[:, 2]
+    px, py, pz = remap_unity_to_plotly(x, y, z)
+    return np.c_[px, py, pz]
+
+
+def build_strikezone_traces(b_xyz: np.ndarray, t_xyz: np.ndarray, g_xyz: np.ndarray):
+    b_m = apply_mapping_xyz(b_xyz)
+    t_m = apply_mapping_xyz(t_xyz)
+    g_m = apply_mapping_xyz(g_xyz)
+    b_closed = np.vstack([b_m, b_m[:1]])
+    t_closed = np.vstack([t_m, t_m[:1]])
+    traces = []
+    traces.append(
+        go.Scatter3d(
+            x=b_closed[:, 0],
+            y=b_closed[:, 1],
+            z=b_closed[:, 2],
+            mode="lines",
+            name="SZ Bottom",
+            legendgroup="StrikeZone",
+            line=dict(color=SZ_COLOR, width=3),
+        )
+    )
+    traces.append(
+        go.Scatter3d(
+            x=t_closed[:, 0],
+            y=t_closed[:, 1],
+            z=t_closed[:, 2],
+            mode="lines",
+            name="SZ Top",
+            legendgroup="StrikeZone",
+            line=dict(color=SZ_COLOR, width=3),
+        )
+    )
+    for i in range(b_m.shape[0]):
+        traces.append(
+            go.Scatter3d(
+                x=[b_m[i, 0], t_m[i, 0]],
+                y=[b_m[i, 1], t_m[i, 1]],
+                z=[b_m[i, 2], t_m[i, 2]],
+                mode="lines",
+                showlegend=False,
+                legendgroup="StrikeZone",
+                line=dict(color=SZ_COLOR, width=2),
+                opacity=SZ_SIDE_OPACITY,
+            )
+        )
+    traces.append(
+        go.Scatter3d(
+            x=g_m[:, 0],
+            y=g_m[:, 1],
+            z=g_m[:, 2],
+            mode="markers+text",
+            name="NineGrid",
+            legendgroup="StrikeZone",
+            marker=dict(
+                size=SZ_GRID_MARKER_SIZE,
+                symbol="circle",
+                line=dict(width=1, color=SZ_COLOR),
+                color="white",
+            ),
+            text=[f"Z{i+1}" for i in range(len(g_m))],
+            textposition="top center",
+        )
+    )
+    return traces
+
+
+# ===== Figure builder（HTML保存版） =====
+def build_and_save_figure(
+    sheet_title: str,
+    p_excel: Path,
+    sz_traces,
+    df_raw: pd.DataFrame,
+    color_by_course: bool = False,
+    course_source_col: str = "__sheet__",
+    html_name: str = None,
+):
+    """
+    sheet_title: Excelシート名（Z1〜Z9 など）
+    html_name: ファイル名用のベース（Noneなら sheet_title をそのまま使う）
+    """
+    if html_name is None:
+        html_name = sheet_title  # ファイル名用
+
+    # vanish の有無によってプレフィックスを変える
+    if VANISH_FLAG:
+        base_player_name = f"{PLAYER_ID}_vanish"
+    else:
+        base_player_name = PLAYER_ID
+
+    ball_x_col, ball_y_col, ball_z_col = pick_ball_columns(df_raw)
+
+    df = (
+        norm_columns(df_raw)
+        .dropna(
+            subset=[
+                "top_x",
+                "top_y",
+                "top_z",
+                "bottom_x",
+                "bottom_y",
+                "bottom_z",
+            ]
+        )
+        .copy()
+    )
+    df["trial"] = pd.to_numeric(df["trial"], errors="coerce").astype("Int64")
+    df["index"] = pd.to_numeric(df["index"], errors="coerce")
+    df = df.dropna(subset=["trial", "index"]).sort_values(["trial", "index"])
+    if SHOW_TRIALS is not None:
+        df = df[df["trial"].isin(SHOW_TRIALS)]
+
+    trials = [int(t) for t in sorted(df["trial"].unique().tolist())]
+    if not trials:
+        print(f"{sheet_title}（表示対象なし）")
+        return
+
+    course_per_trial = {}
+    if color_by_course and course_source_col in df_raw.columns:
+        for t in trials:
+            src_vals = df_raw.loc[df_raw["trial"] == t, course_source_col]
+            course_per_trial[t] = most_common(
+                [guess_zone_label(v) for v in src_vals]
+            )
+
+    trial_data = []
+    max_len = 0
+    for t in trials:
+        seg = df[df["trial"] == t].sort_values("index")
+        tx, ty, tz = remap_unity_to_plotly(
+            seg["top_x"], seg["top_y"], seg["top_z"]
+        )
+        bx, by, bz = remap_unity_to_plotly(
+            seg["bottom_x"], seg["bottom_y"], seg["bottom_z"]
+        )
+        idx = seg["index"].to_numpy()  # -15〜15 など
+        n = len(seg)
+        trial_data.append(
+            dict(
+                t=t,
+                n=n,
+                idx=idx,
+                tx=tx,
+                ty=ty,
+                tz=tz,
+                bx=bx,
+                by=by,
+                bz=bz,
+                zone=course_per_trial.get(t) if color_by_course else None,
+            )
+        )
+        max_len = max(max_len, n)
+
+    # ===== フレームラベルを index に合わせる =====
+    if trial_data:
+        base_idx = trial_data[0]["idx"]
+        # trialごとに index が同じ前提（-15〜15）で進める
+        if len(base_idx) >= max_len:
+            frame_labels = [int(v) for v in base_idx[:max_len]]
+        else:
+            # 念のため fallback（1〜max_len）
+            frame_labels = list(range(1, max_len + 1))
+    else:
+        frame_labels = list(range(1, max_len + 1))
+
+    # label(int) → position(1-based) の対応表
+    label_to_pos = {val: i + 1 for i, val in enumerate(frame_labels)}
+
+    # 再生ボタンに使う「終点index候補」
+    end_pos_list = []
+    used_pair = []
+    for idx_val in END_INDEX_CANDIDATES:
+        if idx_val in label_to_pos:
+            pos = label_to_pos[idx_val]
+            end_pos_list.append(pos)
+            used_pair.append((idx_val, pos))
+    end_pos_list = sorted(set(end_pos_list))
+
+    # ボールデータ
+    ball_data = []
+    if ball_x_col is not None:
+        tmp_ball = pd.DataFrame(
+            {
+                "trial": pd.to_numeric(df_raw["trial"], errors="coerce"),
+                "index": pd.to_numeric(df_raw["index"], errors="coerce"),
+                "ball_x": pd.to_numeric(ball_x_col, errors="coerce"),
+                "ball_y": pd.to_numeric(ball_y_col, errors="coerce"),
+                "ball_z": pd.to_numeric(ball_z_col, errors="coerce"),
+                course_source_col: df_raw.get(course_source_col),
+            }
+        ).dropna(subset=["trial", "index", "ball_x", "ball_y", "ball_z"])
+        for t in trials:
+            tb = tmp_ball[tmp_ball["trial"] == t].sort_values("index")
+            if tb.empty:
+                ball_data.append(
+                    dict(
+                        t=t,
+                        idx=np.array([]),
+                        bx=np.array([]),
+                        by=np.array([]),
+                        bz=np.array([]),
+                        zone=None,
+                    )
+                )
+                continue
+            bpx, bpy, bpz = remap_unity_to_plotly(
+                tb["ball_x"], tb["ball_y"], tb["ball_z"]
+            )
+            zone_label = (
+                most_common([guess_zone_label(v) for v in tb[course_source_col]])
+                if color_by_course
+                else None
+            )
+            ball_data.append(
+                dict(
+                    t=t,
+                    idx=tb["index"].to_numpy(),
+                    bx=np.asarray(bpx),
+                    by=np.asarray(bpy),
+                    bz=np.asarray(bpz),
+                    zone=zone_label,
+                )
+            )
+    else:
+        for t in trials:
+            ball_data.append(
+                dict(
+                    t=t,
+                    idx=np.array([]),
+                    bx=np.array([]),
+                    by=np.array([]),
+                    bz=np.array([]),
+                    zone=None,
+                )
+            )
+    bd_map = {bd["t"]: bd for bd in ball_data}
+
+    def color_for(trial_id: int, i_trial: int):
+        if color_by_course:
+            zlabel = trial_data[i_trial]["zone"] or bd_map[trial_id]["zone"]
+            return Z_COLORS.get(zlabel, "#999999")
+        return TRIAL_COLORS[i_trial % len(TRIAL_COLORS)]
+
+    fig = go.Figure()
+    fig.add_traces(sz_traces)
+    sz_offset = len(sz_traces)
+
+    # ==== トレース配置順：累積代表(線)・累積root → 単フレ代表(線)・単フレroot → 静的パス → ボール ====
+    cum_start = sz_offset
+    for i, td in enumerate(trial_data):
+        col = color_for(td["t"], i)
+        group = f"trial{td['t']}"
+        n0 = 1 if td["n"] > 0 else 0
+        x0, y0, z0 = connectors_slice(
+            td["tx"], td["ty"], td["tz"], td["bx"], td["by"], td["bz"], n0
+        )
+        fig.add_trace(
+            go.Scatter3d(
+                x=x0,
+                y=y0,
+                z=z0,
+                mode="lines",
+                name=f"trial {td['t']}",
+                legendgroup=group,
+                line=dict(color=col, width=3),
+                hoverinfo="skip",
+                showlegend=True,
+                visible=True,
+            )
+        )
+        rx = td["bx"] if root_is_bottom else td["tx"]
+        ry = td["by"] if root_is_bottom else td["ty"]
+        rz = td["bz"] if root_is_bottom else td["tz"]
+        fig.add_trace(
+            go.Scatter3d(
+                x=rx[:n0],
+                y=ry[:n0],
+                z=rz[:n0],
+                mode="markers",
+                name=f"trial {td['t']} (root)",
+                legendgroup=group,
+                showlegend=False,
+                marker=dict(
+                    size=root_marker_size,
+                    symbol="circle-open",
+                    color="white",
+                    line=dict(width=root_marker_line_w, color=col),
+                ),
+                visible=True,
+            )
+        )
+    cum_count = len(trial_data) * 2
+
+    single_start = cum_start + cum_count
+    for i, td in enumerate(trial_data):
+        col = color_for(td["t"], i)
+        group = f"trial{td['t']}"
+        if td["n"] > 0:
+            x1, y1, z1 = connectors_slice_single(
+                td["tx"], td["ty"], td["tz"], td["bx"], td["by"], td["bz"], 0
+            )
+            rxs = [td["bx"][0] if root_is_bottom else td["tx"][0]]
+            rys = [td["by"][0] if root_is_bottom else td["ty"][0]]
+            rzs = [td["bz"][0] if root_is_bottom else td["tz"][0]]
+        else:
+            x1 = y1 = z1 = []
+            rxs = rys = rzs = []
+        fig.add_trace(
+            go.Scatter3d(
+                x=x1,
+                y=y1,
+                z=z1,
+                mode="lines",
+                name=f"trial {td['t']}",
+                legendgroup=group,
+                line=dict(color=col, width=3),
+                showlegend=True,
+                visible=False,
+            )
+        )
+        fig.add_trace(
+            go.Scatter3d(
+                x=rxs,
+                y=rys,
+                z=rzs,
+                mode="markers",
+                legendgroup=group,
+                showlegend=False,
+                marker=dict(
+                    size=root_marker_size,
+                    symbol="circle-open",
+                    color="white",
+                    line=dict(width=root_marker_line_w, color=col),
+                ),
+                visible=False,
+            )
+        )
+    single_count = len(trial_data) * 2
+
+    static_paths_start = single_start + single_count
+    if show_top_bottom_paths:
+        for i, td in enumerate(trial_data):
+            col = color_for(td["t"], i)
+            group = f"trial{td['t']}"
+            fig.add_trace(
+                go.Scatter3d(
+                    x=td["tx"],
+                    y=td["ty"],
+                    z=td["tz"],
+                    mode="lines",
+                    showlegend=False,
+                    legendgroup=group,
+                    line=dict(color=col, width=2),
+                    opacity=0.45,
+                )
+            )
+            fig.add_trace(
+                go.Scatter3d(
+                    x=td["bx"],
+                    y=td["by"],
+                    z=td["bz"],
+                    mode="lines",
+                    showlegend=False,
+                    legendgroup=group,
+                    line=dict(color=col, width=2, dash="dash"),
+                    opacity=0.45,
+                )
+            )
+    static_paths_count = len(trial_data) * (2 if show_top_bottom_paths else 0)
+
+    balls_start = static_paths_start + static_paths_count
+    balls_count = 0
+    for i, td in enumerate(trial_data):
+        col = color_for(td["t"], i)
+        group = f"trial{td['t']}"
+        bd = bd_map[td["t"]]
+        if bd["idx"].size > 0:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=bd["bx"],
+                    y=bd["by"],
+                    z=bd["bz"],
+                    mode="markers",
+                    name=f"ball (trial {td['t']})",
+                    legendgroup=group,
+                    showlegend=False,
+                    marker=dict(
+                        size=5,
+                        symbol="circle",
+                        color=col,
+                        line=dict(width=1, color="black"),
+                    ),
+                )
+            )
+            fig.add_trace(
+                go.Scatter3d(
+                    x=bd["bx"],
+                    y=bd["by"],
+                    z=bd["bz"],
+                    mode="lines",
+                    legendgroup=group,
+                    showlegend=False,
+                    line=dict(width=2, color=col),
+                    opacity=0.35,
+                )
+            )
+            balls_count += 2
+        else:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[],
+                    y=[],
+                    z=[],
+                    mode="markers",
+                    legendgroup=group,
+                    showlegend=False,
+                )
+            )
+            balls_count += 1
+
+    total_traces = len(fig.data)
+
+    # ==== フレーム ====（name と label を index に合わせる）
+    frames = []
+    animated_trace_count = cum_count + single_count
+    animated_indices = list(range(cum_start, cum_start + animated_trace_count))
+
+    for k in range(1, max_len + 1):
+        label_val = frame_labels[k - 1]  # 例: -15, -14, ..., 15
+        fr = []
+        # 累積
+        for td in trial_data:
+            n = min(k, td["n"])
+            if n <= 0:
+                fr.append(go.Scatter3d(x=[], y=[], z=[], mode="lines"))
+            else:
+                xk, yk, zk = connectors_slice(
+                    td["tx"], td["ty"], td["tz"], td["bx"], td["by"], td["bz"], n
+                )
+                fr.append(go.Scatter3d(x=xk, y=yk, z=zk, mode="lines"))
+            rx = td["bx"] if root_is_bottom else td["tx"]
+            ry = td["by"] if root_is_bottom else td["ty"]
+            rz = td["bz"] if root_is_bottom else td["tz"]
+            fr.append(
+                go.Scatter3d(
+                    x=rx[:n],
+                    y=ry[:n],
+                    z=rz[:n],
+                    mode="markers",
+                )
+            )
+        # 単フレーム（k番目のみ）
+        for td in trial_data:
+            if td["n"] >= k:
+                xi, yi, zi = connectors_slice_single(
+                    td["tx"],
+                    td["ty"],
+                    td["tz"],
+                    td["bx"],
+                    td["by"],
+                    td["bz"],
+                    k - 1,
+                )
+                fr.append(go.Scatter3d(x=xi, y=yi, z=zi, mode="lines"))
+                rx1 = [td["bx"][k - 1] if root_is_bottom else td["tx"][k - 1]]
+                ry1 = [td["by"][k - 1] if root_is_bottom else td["ty"][k - 1]]
+                rz1 = [td["bz"][k - 1] if root_is_bottom else td["tz"][k - 1]]
+                fr.append(
+                    go.Scatter3d(
+                        x=rx1,
+                        y=ry1,
+                        z=rz1,
+                        mode="markers",
+                    )
+                )
+            else:
+                fr.append(go.Scatter3d(x=[], y=[], z=[], mode="lines"))
+                fr.append(go.Scatter3d(x=[], y=[], z=[], mode="markers"))
+
+        frame_name = str(label_val)
+        frames.append(go.Frame(data=fr, name=frame_name, traces=animated_indices))
+
+    fig.frames = frames
+
+    # ==== スライダー & 再生 ====（ラベルも index ベース）
+    frame_names = [str(v) for v in frame_labels]
+    first_name = frame_names[0]
+
+    steps = [
+        dict(
+            method="animate",
+            args=[
+                [frame_names[k - 1]],
+                {
+                    "mode": "immediate",
+                    "frame": {"duration": frame_ms, "redraw": True},
+                    "transition": {"duration": 0},
+                },
+            ],
+            label=str(frame_labels[k - 1]),
+        )
+        for k in range(1, max_len + 1)
+    ]
+
+    sliders = [
+        dict(
+            active=0,
+            steps=steps,
+            x=0.1,
+            y=0,
+            xanchor="left",
+            yanchor="top",
+            len=0.8,
+            pad=dict(t=30, b=10),
+        )
+    ]
+
+    # 再生ボタン（fromcurrent を False にして自動再生を防止）
+    def play_button_upto(pos, label_val):
+        return dict(
+            label=f"▶ Play 〜{label_val}",
+            method="animate",
+            args=[
+                frame_names[:pos],
+                {
+                    "fromcurrent": False,  # ★自動再生しない
+                    "mode": "immediate",
+                    "frame": {"duration": frame_ms, "redraw": True},
+                    "transition": {"duration": 0},
+                },
+            ],
+        )
+
+    play_len_buttons = [play_button_upto(pos, idx_val) for idx_val, pos in used_pair]
+
+    play_all_button = dict(
+        label="▶ Play All",
+        method="animate",
+        args=[
+            frame_names,
+            {
+                "fromcurrent": False,  # ★自動再生しない
+                "mode": "immediate",
+                "frame": {"duration": frame_ms, "redraw": True},
+                "transition": {"duration": 0},
+            },
+        ],
+    )
+
+    # ==== 可視性プリセット ====
+    visible_cum = [True] * total_traces
+    for i in range(single_start, single_start + single_count):
+        visible_cum[i] = False
+
+    visible_single = [False] * total_traces
+    for i in range(0, sz_offset):
+        visible_single[i] = True
+    for i in range(single_start, single_start + single_count):
+        visible_single[i] = True
+    for i in range(static_paths_start, static_paths_start + static_paths_count):
+        visible_single[i] = True
+    for i in range(balls_start, balls_start + balls_count):
+        visible_single[i] = True
+
+    updatemenus = [
+        dict(
+            type="buttons",
+            x=0,
+            y=1.12,
+            xanchor="left",
+            buttons=[
+                *play_len_buttons,
+                play_all_button,
+                dict(
+                    label="⏸ Pause",
+                    method="animate",
+                    args=[
+                        [None],
+                        {
+                            "mode": "immediate",
+                            "frame": {"duration": 0, "redraw": True},
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                ),
+                dict(
+                    label="⟲ Reset",
+                    method="animate",
+                    args=[
+                        [first_name],
+                        {
+                            "mode": "immediate",
+                            "frame": {"duration": 0, "redraw": True},
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                ),
+            ],
+        ),
+        dict(
+            type="buttons",
+            x=0.72,
+            y=1.12,
+            xanchor="left",
+            buttons=[
+                dict(
+                    label="□ 単フレーム: OFF（累積）",
+                    method="update",
+                    args=[{"visible": visible_cum}],
+                ),
+                dict(
+                    label="■ 単フレーム: ON",
+                    method="update",
+                    args=[{"visible": visible_single}],
+                ),
+            ],
+        ),
+    ]
+
+    fig.update_layout(
+        title=(
+            f"3D Bat Tips (animated; "
+            f"{'course-colored' if color_by_course else 'trial-colored'}) "
+            f"- {sheet_title}  [{p_excel.name}]"
+        ),
+        scene=dict(
+            xaxis_title="横 Z",
+            yaxis_title="奥行 X",
+            zaxis_title="縦 Y",
+            aspectmode="data",
+            camera=dict(
+                eye=dict(x=2.5, y=2.5, z=1.6),
+                center=dict(x=0, y=0, z=0),
+                up=dict(x=0, y=0, z=1),
+            ),
+        ),
+        margin=dict(l=0, r=0, b=0, t=56),
+        legend=dict(itemsizing="constant", groupclick="togglegroup"),
+        sliders=sliders,
+        updatemenus=updatemenus,
+    )
+
+    # ==== HTML ファイルとして保存 ====
+    # ファイル名は: <PLAYER>[_vanish]_Z1.html など
+    safe_html_name = str(html_name)
+    out_file = OUTPUT_HTML_DIR / f"{base_player_name}_{safe_html_name}.html"
+    fig.write_html(out_file, include_plotlyjs="cdn", full_html=True)
+    print("HTML 書き出し:", out_file)
+
+
+# ===== メイン =====
+p = Path(excel_path)
+ensure_exists(p)
+
+# StrikeZone 読み込み
+sz_b, sz_t, sz_g = load_strikezone(strikezone_base)
+sz_traces = build_strikezone_traces(sz_b, sz_t, sz_g)
+
+all_std_raws = []
+sheet_names = pd.ExcelFile(p).sheet_names
+
+# 各シート（Z1〜Z9 想定）ごとに HTML を出力
+for sheet in sheet_names:
+    df_raw = pd.read_excel(p, sheet_name=sheet, header=0)
+    std_raw = standardize_ball_columns(df_raw)
+    std_raw["__sheet__"] = sheet
+    all_std_raws.append(std_raw)
+
+    # 個別ページ：trial色 → HTML保存
+    # ファイル名は <PLAYER>[_vanish]_Z1.html など
+    build_and_save_figure(
+        sheet_title=sheet,
+        p_excel=p,
+        sz_traces=sz_traces,
+        df_raw=df_raw,
+        color_by_course=False,
+        course_source_col="__sheet__",
+        html_name=sheet,
+    )
+
+# まとめページ：Z色（ALL 用のHTML）
+if all_std_raws:
+    df_all = pd.concat(all_std_raws, ignore_index=True)
+    tmp = df_all.rename(columns={c: c.lower() for c in df_all.columns})
+    tmp["trial"] = pd.to_numeric(tmp["trial"], errors="coerce").astype("Int64")
+    tmp = tmp.dropna(subset=["trial"])
+    tmp["__sheet__"] = df_all["__sheet__"]
+    tmp["__key__"] = tmp["__sheet__"].astype(str) + "#" + tmp["trial"].astype(str)
+    key_to_uid = {k: i + 1 for i, k in enumerate(sorted(tmp["__key__"].unique()))}
+    df_all_uid = df_all.copy().join(tmp[["__key__"]])
+    df_all_uid["__key__"] = df_all_uid["__key__"].astype(str)
+    df_all_uid["trial"] = df_all_uid["__key__"].map(key_to_uid)
+
+    build_and_save_figure(
+        sheet_title="ALL (Z1〜Z9 consolidated; course-colored)",
+        p_excel=p,
+        sz_traces=sz_traces,
+        df_raw=df_all_uid,
+        color_by_course=True,
+        course_source_col="__sheet__",
+        html_name="ALL",
+    )
