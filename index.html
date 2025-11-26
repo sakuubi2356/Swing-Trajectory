@@ -1,164 +1,121 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>Bat Trajectory Viewer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body {
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto,
-                   "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
-      margin: 16px;
-      background: #f5f5f5;
-    }
-    h1 {
-      font-size: 20px;
-      margin-bottom: 12px;
-    }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 12px;
-      padding: 10px 12px;
-      background: #fff;
-      border-radius: 10px;
-      box-shadow: 0 0 4px rgba(0,0,0,0.08);
-    }
-    label {
-      font-size: 14px;
-    }
-    select {
-      padding: 4px 6px;
-      border-radius: 6px;
-      border: 1px solid #ccc;
-      font-size: 14px;
-    }
-    #viewer-wrapper {
-      margin-top: 10px;
-      background: #fff;
-      border-radius: 10px;
-      box-shadow: 0 0 6px rgba(0,0,0,0.12);
-      padding: 8px;
-    }
-    #viewer {
-      width: 100%;
-      height: 80vh;
-      border: none;
-      border-radius: 8px;
-    }
-    .info {
-      font-size: 12px;
-      color: #555;
-      margin-top: 4px;
-    }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>バット軌道ビューア - 選手一覧</title>
+
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 20px;
+    background: #f4f4f4;
+  }
+  h1 {
+    text-align: center;
+    margin-bottom: 30px;
+  }
+  .player {
+    background: white;
+    padding: 16px;
+    margin-bottom: 16px;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  details summary {
+    font-size: 1.2em;
+    cursor: pointer;
+    font-weight: bold;
+    padding: 5px 0;
+  }
+  .links a {
+    display: inline-block;
+    margin: 4px 6px;
+    padding: 6px 12px;
+    background: #1976d2;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 0.9em;
+  }
+  .links a:hover {
+    background: #0d47a1;
+  }
+</style>
 </head>
 <body>
-  <h1>Bat Trajectory Viewer</h1>
 
-  <div class="controls">
-    <label>
-      選手:
-      <select id="playerSelect"></select>
-    </label>
+<h1>バット軌道ビューア - 選手一覧</h1>
 
-    <label>
-      バージョン:
-      <select id="versionSelect">
-        <option value="normal">通常</option>
-        <option value="vanish">vanish</option>
-      </select>
-    </label>
+<script>
+// ==== ファイル一覧（GitHubにあるHTML） ====
+// 必要に応じて追加・編集 OK
+const files = [
+  // ここに自動で追加（実際は下で自動生成する）
+];
 
-    <label>
-      コース:
-      <select id="courseSelect">
-        <option value="ALL">ALL</option>
-        <option value="Z1">Z1</option>
-        <option value="Z2">Z2</option>
-        <option value="Z3">Z3</option>
-        <option value="Z4">Z4</option>
-        <option value="Z5">Z5</option>
-        <option value="Z6">Z6</option>
-        <option value="Z7">Z7</option>
-        <option value="Z8">Z8</option>
-        <option value="Z9">Z9</option>
-      </select>
-    </label>
-  </div>
+// ==== GitHub API からリストを自動取得 ====
+async function loadFiles() {
+  // リポジトリ情報（あなたのアカウント名に変更）
+  const repo = "sakuubi2356/Swing-Trajectory";
 
-  <div id="viewer-wrapper">
-    <iframe id="viewer" src=""></iframe>
-    <div class="info" id="infoText"></div>
-  </div>
+  const url = `https://api.github.com/repos/${repo}/contents/`;
+  const res = await fetch(url);
+  const data = await res.json();
 
-  <script>
-    // ====== 設定：ここに選手を追加していく ======
-    // id: Python 側の PLAYER_ID （フォルダ名）と同じ
-    // hasVanish: vanish 付き HTML を出力しているかどうか
-    const players = [
-      { id: "Ando",   label: "安藤",   hasVanish: true  },
-      { id: "Oomura", label: "大村",   hasVanish: false },
-      // 追加例:
-      // { id: "Nomura", label: "野村", hasVanish: true },
-    ];
+  // HTML のみ抽出
+  const htmlFiles = data
+    .filter(item => item.name.endsWith(".html"))
+    .map(item => item.name);
 
-    const playerSelect  = document.getElementById("playerSelect");
-    const versionSelect = document.getElementById("versionSelect");
-    const courseSelect  = document.getElementById("courseSelect");
-    const viewer        = document.getElementById("viewer");
-    const infoText      = document.getElementById("infoText");
+  buildUI(htmlFiles);
+}
 
-    // プレイヤー選択肢を設定
-    players.forEach(p => {
-      const opt = document.createElement("option");
-      opt.value = p.id;
-      opt.textContent = p.label + " (" + p.id + ")";
-      playerSelect.appendChild(opt);
-    });
+// ==== UI 自動生成 ====
+function buildUI(htmlFiles) {
+  const players = {};
 
-    // vanish が無い選手を選んだら、バージョンを通常固定に
-    function updateVersionOptions() {
-      const currentId = playerSelect.value;
-      const player = players.find(p => p.id === currentId);
-      if (!player) return;
+  // 選手ごとに分類
+  htmlFiles.forEach(f => {
+    const [name, course] = f.replace(".html", "").split("_");
+    if (!players[name]) players[name] = [];
+    players[name].push(course);
+  });
 
-      if (!player.hasVanish) {
-        versionSelect.value = "normal";
-        versionSelect.disabled = true;
-      } else {
-        versionSelect.disabled = false;
-      }
-    }
+  const container = document.createElement("div");
 
-    function buildFilePath() {
-      const playerId = playerSelect.value;
-      const version  = versionSelect.value;
-      const course   = courseSelect.value;
+  Object.keys(players).sort().forEach(player => {
+    const div = document.createElement("div");
+    div.className = "player";
 
-      // Python 側の命名規則に合わせる
-      // normal:  {PLAYER_ID}_{COURSE}.html
-      // vanish:  {PLAYER_ID}_vanish_{COURSE}.html
-      const prefix = (version === "vanish") ? `${playerId}_vanish` : playerId;
-      const fileName = `${prefix}_${course}.html`;
-      return `plots/${fileName}`;
-    }
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = player;
+    details.appendChild(summary);
 
-    function updateViewer() {
-      updateVersionOptions();
-      const path = buildFilePath();
-      viewer.src = path;
-      infoText.textContent = `表示ファイル: ${path}`;
-    }
+    const links = document.createElement("div");
+    links.className = "links";
 
-    playerSelect.addEventListener("change", updateViewer);
-    versionSelect.addEventListener("change", updateViewer);
-    courseSelect.addEventListener("change", updateViewer);
+    players[player]
+      .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}))
+      .forEach(course => {
+        const a = document.createElement("a");
+        const filename = `${player}_${course}.html`;
+        a.href = filename;
+        a.textContent = course;
+        links.appendChild(a);
+      });
 
-    // 初期表示
-    updateViewer();
-  </script>
+    details.appendChild(links);
+    div.appendChild(details);
+    container.appendChild(div);
+  });
+
+  document.body.appendChild(container);
+}
+
+loadFiles();
+</script>
+
 </body>
 </html>
