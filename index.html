@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>バット軌道ビューア - 選手一覧</title>
+
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 20px;
+    background: #f4f4f4;
+  }
+  h1 {
+    text-align: center;
+    margin-bottom: 30px;
+  }
+  .player {
+    background: white;
+    padding: 16px;
+    margin-bottom: 16px;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  details summary {
+    font-size: 1.2em;
+    cursor: pointer;
+    font-weight: bold;
+    padding: 5px 0;
+  }
+  .links a {
+    display: inline-block;
+    margin: 4px 6px;
+    padding: 6px 12px;
+    background: #1976d2;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 0.9em;
+  }
+  .links a:hover {
+    background: #0d47a1;
+  }
+</style>
+</head>
+<body>
+
+<h1>バット軌道ビューア - 選手一覧</h1>
+
+<script>
+// ==== ファイル一覧（GitHubにあるHTML） ====
+// 必要に応じて追加・編集 OK
+const files = [
+  // ここに自動で追加（実際は下で自動生成する）
+];
+
+// ==== GitHub API からリストを自動取得 ====
+async function loadFiles() {
+  // リポジトリ情報（あなたのアカウント名に変更）
+  const repo = "sakuubi2356/Swing-Trajectory";
+
+  const url = `https://api.github.com/repos/${repo}/contents/`;
+  const res = await fetch(url);
+  const data = await res.json();
+
+  // HTML のみ抽出
+  const htmlFiles = data
+    .filter(item => item.name.endsWith(".html"))
+    .map(item => item.name);
+
+  buildUI(htmlFiles);
+}
+
+// ==== UI 自動生成 ====
+function buildUI(htmlFiles) {
+  const players = {};
+
+  // 選手ごとに分類
+  htmlFiles.forEach(f => {
+    const [name, course] = f.replace(".html", "").split("_");
+    if (!players[name]) players[name] = [];
+    players[name].push(course);
+  });
+
+  const container = document.createElement("div");
+
+  Object.keys(players).sort().forEach(player => {
+    const div = document.createElement("div");
+    div.className = "player";
+
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = player;
+    details.appendChild(summary);
+
+    const links = document.createElement("div");
+    links.className = "links";
+
+    players[player]
+      .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}))
+      .forEach(course => {
+        const a = document.createElement("a");
+        const filename = `${player}_${course}.html`;
+        a.href = filename;
+        a.textContent = course;
+        links.appendChild(a);
+      });
+
+    details.appendChild(links);
+    div.appendChild(details);
+    container.appendChild(div);
+  });
+
+  document.body.appendChild(container);
+}
+
+loadFiles();
+</script>
+
+</body>
+</html>
