@@ -7,39 +7,120 @@
 
 <style>
   body {
-    font-family: system-ui, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+                 "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
     margin: 20px;
     background: #f4f4f4;
   }
   h1 {
     text-align: center;
-    margin-bottom: 30px;
+    margin-bottom: 24px;
   }
-  .player {
-    background: white;
+
+  .side-block {
+    margin-bottom: 24px;
+    background: #fff;
     padding: 16px;
-    margin-bottom: 16px;
     border-radius: 10px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.08);
   }
-  details summary {
-    font-size: 1.2em;
-    cursor: pointer;
+  .side-title {
     font-weight: bold;
-    padding: 5px 0;
+    margin-bottom: 8px;
+    font-size: 1.1rem;
   }
-  .links a {
-    display: inline-block;
-    margin: 4px 6px;
+
+  .player-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .player-btn {
     padding: 6px 12px;
-    background: #1976d2;
-    color: white;
-    text-decoration: none;
-    border-radius: 6px;
-    font-size: 0.9em;
+    border-radius: 999px;
+    border: 1px solid #1976d2;
+    background: #fff;
+    color: #1976d2;
+    cursor: pointer;
+    font-size: 0.9rem;
   }
-  .links a:hover {
-    background: #0d47a1;
+  .player-btn:hover {
+    background: #1976d2;
+    color: #fff;
+  }
+
+  #strikezone-wrapper {
+    margin-top: 24px;
+    display: none;  /* 選手が選ばれるまで非表示 */
+  }
+
+  #strikezone-header {
+    margin-bottom: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+  }
+
+  .sz-container {
+    display: flex;
+    align-items: center;
+    gap: 40px;
+    margin-top: 16px;
+  }
+
+  /* ストライクゾーンの 3×3 グリッド */
+  .sz-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 70px);
+    grid-template-rows: repeat(3, 70px);
+    border: 2px solid #333;
+  }
+  .sz-cell {
+    border: 1px solid #333;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+  }
+  .sz-cell.clickable {
+    cursor: pointer;
+    background: #ffe5e5;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .sz-cell.clickable:hover {
+    background: #ffb3b3;
+    transform: translateY(-1px);
+  }
+
+  /* カラーバー（簡易版） */
+  .colorbar {
+    margin-top: 20px;
+    width: 260px;
+  }
+  .colorbar-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    margin-bottom: 4px;
+  }
+  .colorbar-bar {
+    height: 14px;
+    background: linear-gradient(to right, #ffe5e5, #ff0000);
+    border-radius: 999px;
+  }
+
+  .note {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 8px;
+  }
+
+  /* 小さめ画面向け */
+  @media (max-width: 600px) {
+    .sz-container {
+      flex-direction: column;
+      gap: 16px;
+    }
   }
 </style>
 </head>
@@ -47,74 +128,145 @@
 
 <h1>バット軌道ビューア - 選手一覧</h1>
 
+<div id="players-container"></div>
+
+<div id="strikezone-wrapper">
+  <div id="strikezone-header"></div>
+
+  <div class="sz-container">
+    <!-- ストライクゾーン本体 -->
+    <div class="sz-grid" id="strikezone-grid">
+      <!-- JS でセルを埋める -->
+    </div>
+
+    <!-- ここにシルエット画像を置きたければ img を入れる -->
+    <!-- 例: <img src="batter_silhouette.png" alt="batter" style="height:200px;"> -->
+  </div>
+
+  <div class="colorbar">
+    <div class="colorbar-labels">
+      <span>小さい</span><span>大きい</span>
+    </div>
+    <div class="colorbar-bar"></div>
+  </div>
+
+  <p class="note">
+    マスをクリックすると、そのゾーンに対応した HTML ページへ移動します。
+  </p>
+</div>
+
 <script>
-// ==== ファイル一覧（GitHubにあるHTML） ====
-// 必要に応じて追加・編集 OK
-const files = [
-  // ここに自動で追加（実際は下で自動生成する）
+// ================== 設定 ==================
+
+// あなたのリポジトリ名
+const REPO = "sakuubi2356/Swing-Trajectory";
+
+// ファイル構造（「右」「左」フォルダの直下に選手フォルダ）
+const SIDES = ["右", "左"];
+
+// ゾーンの並び（左上から）
+const ZONES_LAYOUT = [
+  ["Z1", null, "Z3"],
+  [null, "Z5", null],
+  ["Z7", null, "Z9"]
 ];
 
-// ==== GitHub API からリストを自動取得 ====
-async function loadFiles() {
-  // リポジトリ情報（あなたのアカウント名に変更）
-  const repo = "sakuubi2356/Swing-Trajectory";
+// ※ Z1.html, Z3.html ... というファイル名を想定。
+//   もし "hayashi_Z1.html" のような名前の場合は、
+//   下の `buildZoneUrl()` を適宜書き換えてください。
 
-  const url = `https://api.github.com/repos/${repo}/contents/`;
+// ================== GitHub API から選手一覧を取得 ==================
+
+async function fetchSidePlayers(side) {
+  const url = `https://api.github.com/repos/${encodeURIComponent(REPO)}/contents/${encodeURIComponent(side)}`;
   const res = await fetch(url);
+  if (!res.ok) {
+    console.error("Failed to fetch:", side, res.status);
+    return [];
+  }
   const data = await res.json();
-
-  // HTML のみ抽出
-  const htmlFiles = data
-    .filter(item => item.name.endsWith(".html"))
-    .map(item => item.name);
-
-  buildUI(htmlFiles);
+  // type: "dir" のものだけ = 選手フォルダ
+  return data
+    .filter(item => item.type === "dir")
+    .map(item => item.name)
+    .sort((a, b) => a.localeCompare(b, "ja"));
 }
 
-// ==== UI 自動生成 ====
-function buildUI(htmlFiles) {
-  const players = {};
+async function loadPlayers() {
+  const container = document.getElementById("players-container");
 
-  // 選手ごとに分類
-  htmlFiles.forEach(f => {
-    const [name, course] = f.replace(".html", "").split("_");
-    if (!players[name]) players[name] = [];
-    players[name].push(course);
-  });
+  for (const side of SIDES) {
+    const players = await fetchSidePlayers(side);
 
-  const container = document.createElement("div");
+    const block = document.createElement("div");
+    block.className = "side-block";
 
-  Object.keys(players).sort().forEach(player => {
-    const div = document.createElement("div");
-    div.className = "player";
+    const title = document.createElement("div");
+    title.className = "side-title";
+    title.textContent = side === "右" ? "右打者" : "左打者";
+    block.appendChild(title);
 
-    const details = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = player;
-    details.appendChild(summary);
+    const list = document.createElement("div");
+    list.className = "player-list";
 
-    const links = document.createElement("div");
-    links.className = "links";
-
-    players[player]
-      .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}))
-      .forEach(course => {
-        const a = document.createElement("a");
-        const filename = `${player}_${course}.html`;
-        a.href = filename;
-        a.textContent = course;
-        links.appendChild(a);
+    players.forEach(player => {
+      const btn = document.createElement("button");
+      btn.className = "player-btn";
+      btn.textContent = player;
+      btn.addEventListener("click", () => {
+        showStrikezone(side, player);
       });
+      list.appendChild(btn);
+    });
 
-    details.appendChild(links);
-    div.appendChild(details);
-    container.appendChild(div);
-  });
-
-  document.body.appendChild(container);
+    block.appendChild(list);
+    container.appendChild(block);
+  }
 }
 
-loadFiles();
+// ================== ストライクゾーン表示 ==================
+
+function buildZoneUrl(side, player, zone) {
+  // 右/選手名/Z1.html というパスを想定
+  return `${encodeURIComponent(side)}/${encodeURIComponent(player)}/${zone}.html`;
+  // 例: ファイル名が "hayashi_Z1.html" なら
+  // return `${encodeURIComponent(side)}/${encodeURIComponent(player)}/${player}_${zone}.html`;
+}
+
+function showStrikezone(side, player) {
+  const wrapper = document.getElementById("strikezone-wrapper");
+  const header  = document.getElementById("strikezone-header");
+  const grid    = document.getElementById("strikezone-grid");
+
+  header.textContent = `${side === "右" ? "右打者" : "左打者"}：${player}`;
+  wrapper.style.display = "block";
+
+  // 一度クリア
+  grid.innerHTML = "";
+
+  // グリッドを生成
+  ZONES_LAYOUT.forEach(row => {
+    row.forEach(zone => {
+      const cell = document.createElement("div");
+      cell.className = "sz-cell";
+      if (zone) {
+        cell.classList.add("clickable");
+        // 表示テキスト
+        cell.textContent = zone;  // 必要ならここを数値に置き換える
+        cell.addEventListener("click", () => {
+          const url = buildZoneUrl(side, player, zone);
+          window.location.href = url; // 同タブで遷移
+          // window.open(url, "_blank"); // 新しいタブで開きたい場合はこちら
+        });
+      }
+      grid.appendChild(cell);
+    });
+  });
+}
+
+// ================== 起動 ==================
+
+loadPlayers();
 </script>
 
 </body>
